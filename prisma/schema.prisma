@@ -1,0 +1,370 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Identity ──────────────────────────────────────────────────────
+
+model users {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  name          String?
+  password_hash String?
+  two_factor_enabled Boolean @default(false)
+  stripe_customer_id String? @unique
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  memberships       memberships[]
+  connected_accounts connected_accounts[]
+  audit_logs_actor  audit_logs[]
+  api_keys          api_keys[]
+  notifications     notifications[]
+}
+
+model organizations {
+  id         String   @id @default(uuid())
+  name       String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  memberships   memberships[]
+  tenants       tenants[]
+  subscriptions subscriptions[]
+}
+
+model memberships {
+  id              String   @id @default(uuid())
+  user_id         String
+  organization_id String
+  role            String // super_admin | admin | member | deployer | viewer
+  created_at      DateTime @default(now())
+
+  user         users         @relation(fields: [user_id], references: [id])
+  organization organizations @relation(fields: [organization_id], references: [id])
+
+  @@unique([user_id, organization_id])
+}
+
+// ── Billing ──────────────────────────────────────────────────
+
+model plans {
+  id          String   @id @default(uuid())
+  slug        String   @unique // starter | pro | team | business
+  name        String
+  price_cents Int
+  interval    String   @default("month")
+  stripe_price_id String? @unique
+  created_at  DateTime @default(now())
+
+  subscriptions subscriptions[]
+}
+
+model subscriptions {
+  id                     String    @id @default(uuid())
+  organization_id        String
+  plan_id                String
+  stripe_subscription_id String?   @unique
+  status                 String    @default("active")
+  current_period_end     DateTime?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  organization organizations @relation(fields: [organization_id], references: [id])
+  plan         plans         @relation(fields: [plan_id], references: [id])
+  tenants      tenants[]
+  invoices     invoices[]
+}
+
+model invoices {
+  id                String   @id @default(uuid())
+  subscription_id    String
+  stripe_invoice_id  String?  @unique
+  amount_cents        Int
+  status              String
+  created_at          DateTime @default(now())
+
+  subscription subscriptions @relation(fields: [subscription_id], references: [id])
+}
+
+// ── Tenancy & templates ──────────────────────────────────
+
+model templates {
+  id                        String   @id @default(uuid())
+  slug                      String   @unique
+  name                      String
+  category                  String // creator | founder | team | agency | business
+  default_quota_gb          Int
+  default_backup_policy     Json
+  default_roles             Json
+  default_onboarding_checklist Json
+  default_theme             String   @default("editorial")
+  support_tier              String   @default("standard")
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+
+  template_features template_features[]
+  tenants            tenants[]
+}
+
+model template_features {
+  id          String @id @default(uuid())
+  template_id String
+  feature_key String
+  enabled     Boolean @default(true)
+
+  template templates @relation(fields: [template_id], references: [id])
+
+  @@unique([template_id, feature_key])
+}
+
+model tenants {
+  id              String   @id @default(uuid())
+  organization_id String
+  template_id     String
+  subscription_id String?
+  name            String
+  status          String   @default("provisioning") // provisioning | ready | suspended | reactivating
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization organizations  @relation(fields: [organization_id], references: [id])
+  template     templates      @relation(fields: [template_id], references: [id])
+  subscription subscriptions? @relation(fields: [subscription_id], references: [id])
+
+  tenant_provisions tenant_provisions[]
+  storage_volumes   storage_volumes[]
+  apps              apps[]
+  domains           domains[]
+  backup_jobs       backup_jobs[]
+  restore_jobs      restore_jobs[]
+  usage_events      usage_events[]
+  revenue_splits    revenue_splits[]
+}
+
+model tenant_provisions {
+  id         String   @id @default(uuid())
+  tenant_id  String
+  job_type   String // create-tenant | apply-template | allocate-storage | setup-backup | setup-domain | issue-ssl | seed-template-data | verify-health | send-welcome-email
+  status     String   @default("queued")
+  error      String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tenant tenants @relation(fields: [tenant_id], references: [id])
+}
+
+// ── Storage, apps, domains ───────────────────────────────────
+
+model storage_volumes {
+  id           String   @id @default(uuid())
+  tenant_id    String
+  quota_gb     Int
+  used_bytes   BigInt   @default(0)
+  ovh_bucket   String
+  ovh_prefix   String
+  created_at   DateTime @default(now())
+
+  tenant tenants @relation(fields: [tenant_id], references: [id])
+}
+
+model apps {
+  id           String   @id @default(uuid())
+  tenant_id    String
+  name         String
+  status       String   @default("stopped")
+  runtime      String   @default("node")
+  created_at   DateTime @default(now())
+
+  tenant tenants @relation(fields: [tenant_id], references: [id])
+}
+
+model domains {
+  id           String   @id @default(uuid())
+  tenant_id    String
+  hostname     String   @unique
+  ssl_status   String   @default("pending")
+  created_at   DateTime @default(now())
+
+  tenant tenants @relation(fields: [tenant_id], references: [id])
+}
+
+// ── Backups ──────────────────────────────────────────────
+
+model backup_jobs {
+  id              String    @id @default(uuid())
+  tenant_id       String
+  status          String    @default("scheduled")
+  retention_days  Int       @default(30)
+  storage_key     String?
+  started_at      DateTime?
+  completed_at    DateTime?
+  created_at      DateTime  @default(now())
+
+  tenant       tenants       @relation(fields: [tenant_id], references: [id])
+  restore_jobs restore_jobs[]
+}
+
+model restore_jobs {
+  id             String    @id @default(uuid())
+  tenant_id      String
+  backup_job_id  String
+  status         String    @default("queued")
+  verified       Boolean   @default(false)
+  started_at     DateTime?
+  completed_at   DateTime?
+  created_at     DateTime  @default(now())
+
+  tenant     tenants     @relation(fields: [tenant_id], references: [id])
+  backup_job backup_jobs @relation(fields: [backup_job_id], references: [id])
+}
+
+// ── Usage, support, notifications ────────────────────────────────
+
+model usage_events {
+  id         String   @id @default(uuid())
+  tenant_id  String
+  event_type String
+  quantity   Int      @default(1)
+  metadata   Json?
+  created_at DateTime @default(now())
+
+  tenant tenants @relation(fields: [tenant_id], references: [id])
+}
+
+model support_tickets {
+  id         String   @id @default(uuid())
+  tenant_id  String
+  subject    String
+  status     String   @default("open")
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model api_keys {
+  id         String    @id @default(uuid())
+  user_id    String
+  label      String
+  key_hash   String    @unique
+  last_used_at DateTime?
+  created_at DateTime  @default(now())
+
+  user users @relation(fields: [user_id], references: [id])
+}
+
+model notifications {
+  id         String   @id @default(uuid())
+  user_id    String
+  title      String
+  body       String
+  read       Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  user users @relation(fields: [user_id], references: [id])
+}
+
+// ── Security & audit ──────────────────────────────────────
+
+model audit_logs {
+  id             String   @id @default(uuid())
+  actor_user_id  String?
+  actor_email    String?
+  actor_role     String?
+  action         String
+  target_type    String?
+  target_id      String?
+  previous_data  Json?
+  new_data       Json?
+  ip_address     String?
+  user_agent     String?
+  reason         String?
+  created_at     DateTime @default(now())
+
+  actor users? @relation(fields: [actor_user_id], references: [id])
+}
+
+model security_events {
+  id         String   @id @default(uuid())
+  event_type String // failed_login | suspicious_activity | capability_disabled | ...
+  severity   String   @default("info")
+  detail     Json?
+  created_at DateTime @default(now())
+}
+
+model admin_actions {
+  id         String   @id @default(uuid())
+  admin_user_id String
+  action     String
+  target_id  String?
+  created_at DateTime @default(now())
+}
+
+// ── Payments & splits (Stripe Connect Express) ─────────────────────────
+
+model connected_accounts {
+  id                String   @id @default(uuid())
+  user_id           String
+  stripe_account_id String   @unique
+  account_type      String   @default("express")
+  charges_enabled   Boolean  @default(false)
+  payouts_enabled   Boolean  @default(false)
+  details_submitted Boolean  @default(false)
+  status            String   @default("pending")
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  user          users           @relation(fields: [user_id], references: [id])
+  payout_ledger payout_ledger[]
+}
+
+model revenue_splits {
+  id                   String    @id @default(uuid())
+  tenant_id            String
+  recipient_user_id    String?
+  stripe_account_id    String?
+  platform_share_pct   Decimal   @db.Decimal(5, 2)
+  recipient_share_pct  Decimal   @db.Decimal(5, 2)
+  active               Boolean   @default(true)
+  effective_from       DateTime  @default(now())
+  effective_to         DateTime?
+  created_by_user_id   String
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  tenant tenants @relation(fields: [tenant_id], references: [id])
+}
+
+model stripe_events {
+  id                  String    @id @default(uuid())
+  stripe_event_id     String    @unique
+  event_type          String
+  livemode            Boolean
+  received_at         DateTime  @default(now())
+  processed_at        DateTime?
+  processing_status   String    @default("received")
+  raw_payload_json    Json
+  signature_verified  Boolean   @default(false)
+  error_message       String?
+}
+
+model payout_ledger {
+  id                   String   @id @default(uuid())
+  stripe_event_id      String?
+  tenant_id            String?
+  connected_account_id String?
+  gross_amount         BigInt   @default(0)
+  platform_fee_amount  BigInt   @default(0)
+  recipient_amount     BigInt   @default(0)
+  currency             String
+  status               String   @default("pending")
+  reference_type       String?
+  reference_id         String?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  connected_account connected_accounts? @relation(fields: [connected_account_id], references: [id])
+}
