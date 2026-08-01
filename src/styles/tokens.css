@@ -1,0 +1,22 @@
+:root {
+  /* Color tokens — warm ivory / dark charcoal editorial system */
+  --color-bg: #f6f1e7;
+  --color-surface: #211e1b;
+  --color-surface-alt: #e7dfcf;
+  --color-ink: #1b1815;
+  --color-muted: #8a8072;
+  --color-accent: #c1531b;
+  --color-success: #4b7a5b;
+  --color-warning: #c08a2e;
+  --color-danger: #a23b2e;
+
+  /* Type */
+  --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
+  --font-sans: "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Layout */
+  --divider: 1px solid rgba(27, 24, 21, 0.1);
+  --shadow-soft: 0 1px 2px rgba(27, 24, 21, 0.04), 0 6px 20px rgba(27, 24, 21, 0.06);
+  --radius-card: 10px;
+}
